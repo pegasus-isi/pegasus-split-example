@@ -1,0 +1,41 @@
+#!/bin/bash
+
+set -e
+
+INPUT_FILE_PATH=$1
+
+if [ "x$INPUT_FILE_PATH" = "x" ]; then
+    echo "Usage:   ./submit [INPUT_FILE_PATH]"
+    echo "Example: ./submit \$PWD/test/Ulysses_by_James_Joyce.txt"
+    exit 1
+fi
+
+TOPDIR=`pwd`
+    
+export RUN_ID=wf-`date +'%s'`
+export RUN_DIR=$PWD/runs/$RUN_ID
+mkdir -p $RUN_DIR
+
+echo 
+echo "Output directory is $RUN_DIR/outputs"
+echo
+
+# generate the dax
+export PYTHONPATH=`pegasus-config --python`
+./dax-level-1 $RUN_DIR $INPUT_FILE_PATH
+    
+# generate the site catalog
+SC=$RUN_DIR/sites.xml
+envsubst <sites.xml.template >$SC
+
+# plan and submit the  workflow
+pegasus-plan \
+    -Dpegasus.catalog.site.file=$SC \
+    --conf pegasus.conf \
+    --sites condorpool \
+    --relative-dir $RUN_ID \
+    --dir $RUN_DIR/workflow \
+    --output-site local \
+    --dax dax.xml \
+    --submit
+

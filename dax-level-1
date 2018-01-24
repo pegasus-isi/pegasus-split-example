@@ -1,0 +1,70 @@
+#!/usr/bin/env python
+
+from Pegasus.DAX3 import *
+import sys
+import os
+import glob
+import re
+
+run_dir = sys.argv[1]
+input_full_path = sys.argv[2]
+
+base_dir = os.getcwd()
+
+# Create a abstract dag
+dax = ADAG("split")
+
+# Add executables to the DAX-level replica catalog
+split = Executable(name="split.sh", arch="x86_64", installed=False)
+split.addPFN(PFN("file://" + base_dir + "/tools/split.sh", "local"))
+dax.addExecutable(split)
+
+dax2 = Executable(name="dax-level-2", arch="x86_64", installed=False)
+dax2.addPFN(PFN("file://" + base_dir + "/dax-level-2", "local"))
+dax.addExecutable(dax2)
+
+# add split job
+input_filename = re.sub(".*/", "", input_full_path)
+
+# create Pegasus file objects
+input_file = File(input_filename)
+input_file.addPFN(PFN("file://" + input_full_path, "local"))
+dax.addFile(input_file)
+# no outputs are necessary here - we are running the job locally, and
+# will leave the chunks in a directory where the sub workflow can 
+# pick them up
+
+j1 = Job(name="split.sh")
+j1.addProfile(Profile("hints", "execution.site", "local"))
+j1.uses(input_file, link=Link.INPUT)
+j1.addArguments(run_dir, input_file)
+dax.addJob(j1)
+
+# now create a sub workflow to process the chunks
+subdax_file = File("level-2.xml")
+subdax_file.addPFN(PFN("file://%s/level-2.xml" % (run_dir), "local"))
+dax.addFile(subdax_file)
+
+j2 = Job(name="dax-level-2")
+j2.addProfile(Profile("hints", "execution.site", "local"))
+j2.addArguments(base_dir, run_dir)
+dax.addJob(j2)
+dax.depends(parent=j1, child=j2)
+
+# then run the subworkflow
+j3 = DAX("level-2.xml")
+j3.addArguments("-Dpegasus.catalog.site.file=%s/sites.xml" % (run_dir),
+                "--sites", "condorpool",
+                "--output-site", "local",
+                "--basename", "level-2",
+                "--force",
+                "--cleanup", "none")
+j3.uses(subdax_file, link=Link.INPUT)
+dax.addDAX(j3)
+dax.depends(parent=j2, child=j3)
+
+# Write the DAX to stdout
+f = open("dax.xml", "w")
+dax.writeXML(f)
+f.close()
+
